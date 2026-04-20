@@ -1,0 +1,73 @@
+@startuml C4_Components_EventPlatform
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+LAYOUT_TOP_DOWN()
+
+title C4 Level 3 — Components: Event Streaming Platform
+
+' ─── Внешние контейнеры (источники / потребители) ─────────────────────────
+Container_Ext(clinic_api,   "Clinic API",          "Go",           "Продюсер событий клиники")
+Container_Ext(fintech_svc,  "Fintech Services",    "Go / Java",    "Продюсер финансовых событий")
+Container_Ext(ai_svc,       "AI Services",         "Python",       "Продюсер AI-событий")
+Container_Ext(legacy_esb,   "ESB (Apache Camel)",  "Legacy",       "Антикоррупционный мост из DWH")
+Container_Ext(flink_jobs,   "Stream Processors",   "Apache Flink", "Трансформации Bronze→Silver")
+Container_Ext(s3_sink,      "Object Storage",      "YOS / S3",     "Bronze / Silver хранилище")
+Container_Ext(clinic_dp,    "Clinic Data Product", "ClickHouse",   "Gold слой — потребитель событий")
+Container_Ext(fintech_dp,   "Fintech Data Product","ClickHouse",   "Gold слой — потребитель событий")
+
+' ═══════════════════════════════════════════════════════════════════════════
+' EVENT STREAMING PLATFORM — компоненты
+' ═══════════════════════════════════════════════════════════════════════════
+System_Boundary(esp, "Event Streaming Platform (Apache Kafka, Managed Yandex Cloud)") {
+
+    Component(broker_cluster, "Kafka Broker Cluster",
+              "Apache Kafka, 3+ brokers, replication factor 3",
+              "Хранение и доставка событий.\nГарантия at-least-once delivery.\nRetention: 7 дней (бизнес-события), 90 дней (аудит).")
+
+    Component(kraft, "Cluster Coordinator",
+              "KRaft (встроенный в Kafka 3.x)",
+              "Координация кластера без Zookeeper.\nОтвечает за выборы лидера и метаданные партиций.")
+
+    Component(schema_registry, "Schema Registry",
+              "Apicurio Registry (OpenAPI + Avro + Protobuf)",
+              "Версионирование схем событий.\nПравила: BACKWARD_TRANSITIVE compatibility.\nЗапрет деплоя при нарушении совместимости схемы.")
+
+    Component(kafka_connect, "Kafka Connect",
+              "Kafka Connect + Debezium CDC",
+              "Source connectors:\n  • Debezium: SQL Server → Kafka (CDC, reads transaction log)\n  • MedDevice IoT connector\nSink connectors:\n  • S3 Sink → Object Storage (Bronze)")
+
+    Component(dlq, "Dead Letter Queue Topics",
+              "Kafka Topics (dlq.*)",
+              "Хранит failed/unprocessable события.\nМониторинг: alert при DLQ lag > 100.\nRe-processing через отдельный consumer.")
+
+    Component(audit_topic, "Audit Log Topic",
+              "Kafka Topic (audit.events, immutable, retention: 5 лет)",
+              "Все события записываются в audit topic.\nИспользуется для compliance (152-ФЗ, ЦБ РФ).\nACL: write-only для продюсеров, read-only для аудиторов.")
+
+    Component(topic_routing, "Topic Routing & ACL",
+              "Kafka ACL + Topic Naming Convention",
+              "Конвенция: <domain>.<entity>.<event-type>\nПример: clinic.visit.created, fintech.payment.processed\nACL: AI-домен не имеет доступа к fintech.* топикам.\nМедицинские топики: med.* — доступ только AI Services.")
+}
+
+' ─── Отношения: Продюсеры → Broker ────────────────────────────────────────
+Rel(clinic_api,  broker_cluster, "Публикует clinic.* события",      "Kafka Producer API (Avro)")
+Rel(fintech_svc, broker_cluster, "Публикует fintech.* события",     "Kafka Producer API (Avro)")
+Rel(ai_svc,      broker_cluster, "Публикует med.ai.* события",      "Kafka Producer API (isolated ACL)")
+Rel(legacy_esb,  kafka_connect,  "Поток из DWH через CDC",          "Debezium JDBC / SQL Server CDC")
+Rel(kafka_connect, broker_cluster,"Записывает CDC-события в топики","Kafka Connect API")
+
+' ─── Внутренние отношения ─────────────────────────────────────────────────
+Rel(broker_cluster, schema_registry, "Валидирует схему события",    "Schema Registry API")
+Rel(broker_cluster, dlq,             "Failed events → DLQ",         "Kafka internal routing")
+Rel(broker_cluster, audit_topic,     "Все события → Audit",         "Mirror / interceptor")
+Rel(topic_routing,  broker_cluster,  "Применяет ACL-правила",       "Kafka ACL API")
+
+' ─── Отношения: Broker → Потребители ─────────────────────────────────────
+Rel(broker_cluster, kafka_connect, "S3 Sink: Bronze в Object Storage", "Kafka Consumer")
+Rel(kafka_connect,  s3_sink,       "Записывает Bronze-данные",         "S3 API")
+Rel(broker_cluster, flink_jobs,    "Потоковые трансформации",          "Kafka Consumer (Flink source)")
+Rel(flink_jobs,     clinic_dp,     "Silver → Gold (Clinic)",           "ClickHouse INSERT")
+Rel(flink_jobs,     fintech_dp,    "Silver → Gold (Fintech)",          "ClickHouse INSERT")
+
+@enduml

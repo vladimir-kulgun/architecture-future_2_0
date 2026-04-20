@@ -1,0 +1,202 @@
+@startuml EventStorming_Future20
+' Big Picture Event Storming — «Будущее 2.0»
+' Нотация:
+'   Оранжевый  = Domain Event
+'   Синий      = Command
+'   Жёлтый     = Actor / System
+'   Фиолетовый = Policy (реакция на событие)
+'   Розовый    = External System
+'   Зелёный    = Read Model / Query
+
+skinparam {
+  defaultFontName  Arial
+  defaultFontSize  11
+  rectangleBorderColor #555
+}
+
+title Big Picture Event Storming — «Будущее 2.0»\n(Swimlanes по доменам; временная ось → слева направо)
+
+' ══════════════════════════════════════════════════════════════════
+' SWIMLANE: CLINIC DOMAIN
+' ══════════════════════════════════════════════════════════════════
+package "Clinic Domain" #e8f5e9 {
+
+  ' --- Patient Registration flow ---
+  rectangle "Врач /\nОператор" as actor_doctor #fff9c4
+  rectangle "Зарегистрировать\nпациента" as cmd_reg #bbdefb
+  rectangle "**PatientRegistered**\nclinic.patient.registered" as ev_pat_reg #ff8f00
+  rectangle "Назначить\nприём" as cmd_appt #bbdefb
+  rectangle "**AppointmentScheduled**\nclinic.appointment.scheduled" as ev_appt #ff8f00
+
+  ' --- Visit flow ---
+  rectangle "Начать\nприём" as cmd_visit #bbdefb
+  rectangle "**VisitStarted**\nclinic.visit.started" as ev_visit_start #ff8f00
+  rectangle "Завершить\nприём" as cmd_visit_end #bbdefb
+  rectangle "**VisitCompleted**\nclinic.visit.completed" as ev_visit_done #ff8f00
+
+  ' --- Inventory ---
+  rectangle "Использовать\nрасходник" as cmd_inv #bbdefb
+  rectangle "**ItemConsumed**\nclinic.inventory.consumed" as ev_item #ff8f00
+  rectangle "Уровень\nзапасов" as rm_stock #c8e6c9
+
+  actor_doctor --> cmd_reg
+  cmd_reg --> ev_pat_reg
+  ev_pat_reg --> cmd_appt
+  cmd_appt --> ev_appt
+  ev_appt --> cmd_visit
+  cmd_visit --> ev_visit_start
+  ev_visit_start --> cmd_visit_end
+  cmd_visit_end --> ev_visit_done
+  ev_visit_done --> cmd_inv
+  cmd_inv --> ev_item
+  ev_item --> rm_stock
+}
+
+' ══════════════════════════════════════════════════════════════════
+' SWIMLANE: FINTECH DOMAIN
+' ══════════════════════════════════════════════════════════════════
+package "Fintech Domain" #e3f2fd {
+
+  ' --- Account / Credit flow ---
+  rectangle "Пациент /\nКлиент" as actor_client #fff9c4
+  rectangle "Открыть\nсчёт" as cmd_acc #bbdefb
+  rectangle "**AccountOpened**\nfintech.account.opened" as ev_acc #ff8f00
+  rectangle "Подать заявку\nна кредит" as cmd_credit_req #bbdefb
+  rectangle "**CreditApplicationSubmitted**\nfintech.credit.applied" as ev_credit_app #ff8f00
+
+  rectangle "Policy:\nПроверка\nкредитного рейтинга" as pol_credit #ce93d8
+  rectangle "Одобрить\nкредит" as cmd_credit_appr #bbdefb
+  rectangle "**LoanApproved**\nfintech.credit.approved" as ev_loan_appr #ff8f00
+  rectangle "Создать\nкредитный договор" as cmd_contract #bbdefb
+  rectangle "**CreditAgreementCreated**\nfintech.credit.contract_created" as ev_contract #ff8f00
+
+  ' --- Payment ---
+  rectangle "Провести\nплатёж" as cmd_pay #bbdefb
+  rectangle "**PaymentProcessed**\nfintech.payment.processed" as ev_pay #ff8f00
+  rectangle "**TransactionCompleted**\nfintech.account.tx_completed" as ev_tx #ff8f00
+
+  actor_client --> cmd_acc
+  cmd_acc --> ev_acc
+  ev_acc --> cmd_credit_req
+  cmd_credit_req --> ev_credit_app
+  ev_credit_app --> pol_credit
+  pol_credit --> cmd_credit_appr
+  cmd_credit_appr --> ev_loan_appr
+  ev_loan_appr --> cmd_contract
+  cmd_contract --> ev_contract
+  actor_client --> cmd_pay
+  cmd_pay --> ev_pay
+  ev_pay --> ev_tx
+}
+
+' ══════════════════════════════════════════════════════════════════
+' SWIMLANE: AI/ML DOMAIN  [ISOLATED]
+' ══════════════════════════════════════════════════════════════════
+package "AI/ML Domain  [ISOLATED]" #fce4ec {
+
+  rectangle "Policy:\nVisitCompleted\n→ запустить AI-анализ" as pol_ai #ce93d8
+  rectangle "Загрузить\nснимок" as cmd_upload #bbdefb
+  rectangle "**MedicalImageUploaded**\nmed.ai.image_uploaded\n[внутреннее, не публикуется]" as ev_img #ff8f00
+  rectangle "Выполнить\nдиагностику" as cmd_diag #bbdefb
+  rectangle "**AIStudyCompleted**\nmed.ai.diagnostic.completed" as ev_ai_done #ff8f00
+  rectangle "**AnomalyDetected**\nmed.ai.anomaly.detected\n[alert → врачу]" as ev_anomaly #ff8f00
+  rectangle "Переобучить\nмодель" as cmd_retrain #bbdefb
+  rectangle "**ModelRetrained**\nmed.ai.model.retrained\n[внутреннее]" as ev_model #ff8f00
+
+  pol_ai --> cmd_upload
+  cmd_upload --> ev_img
+  ev_img --> cmd_diag
+  cmd_diag --> ev_ai_done
+  ev_ai_done --> ev_anomaly
+  ev_ai_done --> cmd_retrain
+  cmd_retrain --> ev_model
+}
+
+' ══════════════════════════════════════════════════════════════════
+' SWIMLANE: CORPORATE / HQ DOMAIN
+' ══════════════════════════════════════════════════════════════════
+package "Corporate / HQ Domain" #fff3e0 {
+
+  rectangle "HR-менеджер" as actor_hr #fff9c4
+  rectangle "Принять\nсотрудника" as cmd_hire #bbdefb
+  rectangle "**EmployeeHired**\ncorp.employee.hired" as ev_hire #ff8f00
+  rectangle "Уволить\nсотрудника" as cmd_term #bbdefb
+  rectangle "**EmployeeTerminated**\ncorp.employee.terminated" as ev_term #ff8f00
+
+  rectangle "Policy:\nEmployeeTerminated\n→ отозвать доступ" as pol_iam #ce93d8
+
+  rectangle "Сформировать\nKPI-отчёт" as cmd_kpi #bbdefb
+  rectangle "**KPIReportGenerated**\ncorp.kpi.report_generated" as ev_kpi #ff8f00
+  rectangle "KPI\nдашборд" as rm_kpi #c8e6c9
+
+  actor_hr --> cmd_hire
+  cmd_hire --> ev_hire
+  actor_hr --> cmd_term
+  cmd_term --> ev_term
+  ev_term --> pol_iam
+  cmd_kpi --> ev_kpi
+  ev_kpi --> rm_kpi
+}
+
+' ══════════════════════════════════════════════════════════════════
+' SWIMLANE: FUTURE DOMAINS (новые партнёры)
+' ══════════════════════════════════════════════════════════════════
+package "Future Domains" #f3e5f5 {
+
+  rectangle "Фармацевтический\nпартнёр" as ext_pharma #ffccbc
+  rectangle "**DrugSupplyUpdated**\npharma.drug.supply_updated" as ev_pharma #ff8f00
+  rectangle "Производитель\nмед. оборудования" as ext_meddev #ffccbc
+  rectangle "**DeviceTelemetryReceived**\nmeddev.device.telemetry" as ev_telemetry #ff8f00
+
+  ext_pharma --> ev_pharma
+  ext_meddev --> ev_telemetry
+}
+
+' ══════════════════════════════════════════════════════════════════
+' SWIMLANE: EVENT INFRASTRUCTURE (Kafka)
+' ══════════════════════════════════════════════════════════════════
+package "Event Infrastructure (Kafka)" #ede7f6 {
+
+  rectangle "Schema\nRegistry" as sr #e1bee7
+  rectangle "**Audit Log**\naudit.events\n(все события,\nretention 5 лет)" as audit #ff8f00
+  rectangle "**DLQ**\ndlq.*\n(failed events)" as dlq #ffcdd2
+  rectangle "Data Platform\n(Bronze→Silver→Gold)" as dp #e1bee7
+
+  sr --> audit
+  sr --> dlq
+  audit --> dp
+}
+
+' ══════════════════════════════════════════════════════════════════
+' CROSS-DOMAIN SUBSCRIPTIONS (Policies и реакции)
+' ══════════════════════════════════════════════════════════════════
+
+' PatientRegistered → Fintech (открыть счёт автоматически)
+ev_pat_reg -[#e91e63,dashed]-> pol_credit : "Policy: PatientRegistered\n→ предложить финансовый\nпродукт (опционально)"
+
+' VisitCompleted → AI
+ev_visit_done -[#9c27b0,dashed]-> pol_ai : "Policy: VisitCompleted\n→ инициировать AI-анализ\n(если есть назначение)"
+
+' EmployeeTerminated → IAM (отозвать доступ)
+pol_iam -[#f44336,dashed]-> sr : "Policy: EmployeeTerminated\n→ отозвать все токены IAM"
+
+' All events → Audit
+ev_pat_reg -[#607d8b,dotted]-> audit
+ev_contract -[#607d8b,dotted]-> audit
+ev_ai_done  -[#607d8b,dotted]-> audit
+ev_hire     -[#607d8b,dotted]-> audit
+
+' ══════════════════════════════════════════════════════════════════
+' ЛЕГЕНДА
+' ══════════════════════════════════════════════════════════════════
+legend right
+  |= Цвет |= Тип элемента |
+  |<#ff8f00>  | Domain Event (оранжевый) |
+  |<#bbdefb>  | Command (синий) |
+  |<#fff9c4>  | Actor / External System (жёлтый) |
+  |<#ce93d8>  | Policy / Reaction (фиолетовый) |
+  |<#c8e6c9>  | Read Model / View (зелёный) |
+  |<#ffccbc>  | External System (розовый) |
+endlegend
+
+@enduml

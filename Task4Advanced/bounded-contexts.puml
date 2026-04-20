@@ -1,0 +1,124 @@
+@startuml BoundedContexts_Future20
+skinparam {
+  packageBorderColor      #455a64
+  packageBackgroundColor  #fafafa
+  rectangleBorderColor    #78909c
+  rectangleBackgroundColor #eceff1
+  arrowColor              #37474f
+  arrowThickness          1.5
+  noteBackgroundColor     #fffde7
+  noteBorderColor         #f9a825
+  defaultFontName         Arial
+  defaultFontSize         12
+}
+
+title Context Map — «Будущее 2.0» (DDD Bounded Contexts, C4-Style)
+
+' ══════════════════════════════════════════════════════════════════
+' CLINIC DOMAIN
+' ══════════════════════════════════════════════════════════════════
+package "Clinic Domain" #e8f5e9 {
+  rectangle "**Patient Flow BC**\n──────────────────\nАгрегаты: Patient, Appointment\nСобытия: PatientRegistered,\nAppointmentScheduled,\nVisitCompleted" as PF #c8e6c9
+  rectangle "**Clinical Operations BC**\n──────────────────\nАгрегаты: Visit, Treatment\nСобытия: TreatmentStarted,\nProcedureCompleted" as CO #c8e6c9
+  rectangle "**Inventory BC**\n──────────────────\nАгрегаты: InventoryItem,\nStockLevel\nСобытия: StockReplenished,\nItemConsumed" as INV #c8e6c9
+}
+
+' ══════════════════════════════════════════════════════════════════
+' FINTECH DOMAIN
+' ══════════════════════════════════════════════════════════════════
+package "Fintech Domain" #e3f2fd {
+  rectangle "**Accounts & Banking BC**\n──────────────────\nАгрегаты: Account, Transaction\nСобытия: AccountOpened,\nTransactionCompleted,\nPaymentProcessed" as AB #bbdefb
+  rectangle "**Credit BC**\n──────────────────\nАгрегаты: CreditAgreement,\nLoan, Repayment\nСобытия: CreditAgreementCreated,\nLoanApproved, LoanRepaid" as CR #bbdefb
+  rectangle "**Regulatory Reporting BC**\n──────────────────\nАгрегаты: Report\nСобытия: RegulatoryReportSubmitted\nПотребляет события всех BC" as RR #bbdefb
+}
+
+' ══════════════════════════════════════════════════════════════════
+' AI / ML DOMAIN  — изолирован
+' ══════════════════════════════════════════════════════════════════
+package "AI/ML Domain  [ISOLATED]" #fce4ec {
+  rectangle "**Diagnostics BC**\n──────────────────\nАгрегаты: DiagnosticSession,\nDiagnosticResult\nСобытия: AIStudyCompleted,\nAnomalyDetected\nТопики: med.ai.*  (ACL)" as DX #f8bbd0
+  rectangle "**Model Management BC**\n──────────────────\nАгрегаты: MLModel, Experiment\nСобытия: ModelDeployed,\nModelRetrained\n(внутренние, не публикуются)" as MM #f8bbd0
+}
+
+' ══════════════════════════════════════════════════════════════════
+' CORPORATE / HQ DOMAIN
+' ══════════════════════════════════════════════════════════════════
+package "Corporate / HQ Domain" #fff3e0 {
+  rectangle "**HR BC**\n──────────────────\nАгрегаты: Employee, Role\nСобытия: EmployeeHired,\nEmployeeTerminated,\nRoleChanged" as HR #ffe0b2
+  rectangle "**Finance & KPI BC**\n──────────────────\nАгрегаты: KPISnapshot, Budget\nСобытия: KPIReportGenerated,\nBudgetApproved\nПотребляет Gold data products" as FK #ffe0b2
+}
+
+' ══════════════════════════════════════════════════════════════════
+' PLATFORM (горизонтальные сервисы)
+' ══════════════════════════════════════════════════════════════════
+package "Platform Domain" #f3e5f5 {
+  rectangle "**Event Infrastructure BC**\n──────────────────\nKafka Broker + Schema Registry\n+ DLQ + Audit Log\nТопики: <domain>.<entity>.<event>" as EI #e1bee7
+  rectangle "**Identity & Access BC**\n──────────────────\nАгрегаты: User, Role, Policy\nSSO (LDAP / Yandex ID) + OPA\nПредоставляет ACL всем доменам" as IAM #e1bee7
+  rectangle "**Data Catalog BC**\n──────────────────\nАгрегаты: DataProduct, Dataset\nDataHub: lineage, tags, ownership\nПубликует метаданные витрин" as DC #e1bee7
+}
+
+' ══════════════════════════════════════════════════════════════════
+' LEGACY  (переходный период)
+' ══════════════════════════════════════════════════════════════════
+package "Legacy  [ANTI-CORRUPTION LAYER]" #eceff1 {
+  rectangle "**DWH Adapter BC**\n──────────────────\nDebezium CDC: SQL Server → Kafka\nRead-only с этапа 2\nВыводится в конце этапа 1" as DWH #cfd8dc
+  rectangle "**ESB Bridge BC**\n──────────────────\nApache Camel → Kafka Connect\nАнтикоррупционный транслятор\nВыводится вместе с DWH" as ESB #cfd8dc
+}
+
+' ══════════════════════════════════════════════════════════════════
+' ОТНОШЕНИЯ МЕЖДУ BOUNDED CONTEXTS
+' ══════════════════════════════════════════════════════════════════
+
+' --- Clinic internal ---
+PF -right-> CO  : "VisitCompleted\n[Published Event]"
+CO -down-> INV  : "ItemConsumed\n[Published Event]"
+
+' --- Clinic → Event Infrastructure ---
+PF  ..> EI : "Публикует\nclinic.patient.*\nclinic.appointment.*"
+CO  ..> EI : "Публикует\nclinic.visit.*"
+INV ..> EI : "Публикует\nclinic.inventory.*"
+
+' --- Fintech → Event Infrastructure ---
+AB ..> EI : "Публикует\nfintech.account.*\nfintech.payment.*"
+CR ..> EI : "Публикует\nfintech.credit.*"
+
+' --- AI → Event Infrastructure (isolated) ---
+DX ..> EI : "Публикует\nmed.ai.diagnostic.*\n[ACL: только AI домен]"
+
+' --- Corporate → Event Infrastructure ---
+HR ..> EI : "Публикует\ncorp.employee.*"
+FK ..> EI : "Публикует\ncorp.kpi.*"
+
+' --- Subscriptions (Event Infrastructure → Consumers) ---
+EI --> CR  : "Подписка:\nPatientRegistered\n[Customer-Supplier]"
+EI --> DX  : "Подписка:\nVisitCompleted\n→ инициирует AI-анализ"
+EI --> FK  : "Подписка:\nвсе домены → KPI"
+EI --> RR  : "Подписка:\nfintech.* → отчётность ЦБ"
+
+' --- Legacy ACL → Event Infrastructure ---
+DWH ..> EI : "CDC события\n[ACL — переходный период]"
+ESB ..> EI : "Трансляция legacy\n[ACL — переходный период]"
+
+' --- IAM (cross-cutting) ---
+IAM ..> PF  : "AuthN/AuthZ"
+IAM ..> AB  : "AuthN/AuthZ"
+IAM ..> EI  : "Topic ACL\n(RBAC на топики)"
+
+' --- Data Catalog ---
+EI  ..> DC  : "Lineage метаданные\n[DataHub ingestion]"
+PF  ..> DC  : "Регистрирует\nClinic Data Product"
+AB  ..> DC  : "Регистрирует\nFintech Data Product"
+
+' ══════════════════════════════════════════════════════════════════
+' ЛЕГЕНДА ПАТТЕРНОВ
+' ══════════════════════════════════════════════════════════════════
+note bottom of EI
+  **Паттерны интеграции между BC:**
+  ──────────────────────────────
+  →  Published Language (события через Kafka)
+  ..> Conformist / Customer-Supplier
+  [ACL]  Anti-Corruption Layer (Legacy → новые домены)
+  [ISOLATED]  Separate Ways (AI/ML — нет прямых связей)
+end note
+
+@enduml

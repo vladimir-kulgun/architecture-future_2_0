@@ -1,0 +1,27 @@
+# Terraform local state — must never be committed; state lives in S3 backend
+*.tfstate
+*.tfstate.backup
+
+# Terraform working directory — generated on `terraform init`
+**/.terraform/
+
+# Plan files — sensitive binary; passed between CI jobs via artifacts, not git
+tfplan
+*.tfplan
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Sensitive variable files
+*.auto.tfvars
+
+# Override files (local developer overrides)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform CLI config
+.terraformrc
+terraform.rc

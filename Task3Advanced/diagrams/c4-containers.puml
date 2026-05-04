@@ -1,0 +1,128 @@
+@startuml C4_Containers_Future20
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+LAYOUT_LEFT_RIGHT()
+
+title C4 Level 2 — Containers: «Будущее 2.0» (TO-BE, год 3)
+
+' ─── Акторы ───────────────────────────────────────────────────────────────
+Person(doctor,   "Врач / Оператор")
+Person(patient,  "Пациент / Клиент")
+Person(analyst,  "Бизнес-аналитик")
+
+' ══════════════════════════════════════════════════════════════════════════
+' PLATFORM SERVICES — горизонтальная платформа
+' ══════════════════════════════════════════════════════════════════════════
+System_Boundary(platform, "Platform Services (Yandex Cloud)") {
+    Container(kafka,      "Event Streaming Platform",  "Apache Kafka (Managed YC)",\n"Schema Registry, DLQ, Audit Log.\nЗамена Apache Camel ESB.")
+    Container(gateway,    "API Gateway",               "Kong",                       "Единая точка доступа к доменным API.\nAuth, rate limiting, routing.")
+    Container(catalog,    "Data Catalog",              "DataHub",                    "Lineage данных, классификация,\nпоиск по доменным продуктам.")
+    Container(portal,     "Self-Service Portal",       "Apache Superset + Power BI", "Витрина данных для бизнеса.\nПРЕ-built + custom отчёты.\nИСКЛЮЧАЕТ медкарты.")
+    Container(object_store, "Object Storage",          "Yandex Object Storage (S3)", "Bronze / Silver слои данных.\nTerraform state. Зашифровано.")
+}
+
+' ══════════════════════════════════════════════════════════════════════════
+' CLINIC DOMAIN
+' ══════════════════════════════════════════════════════════════════════════
+System_Boundary(clinic_domain, "Clinic Domain") {
+    Container(clinic_ui,  "Clinic Web App",     "React / TypeScript",   "Замена PowerBuilder.\nОперационный UI для врачей и операторов.")
+    Container(clinic_api, "Clinic API",          "Go / gRPC + REST",     "Бизнес-логика клиники:\nпоток пациентов, расписание, инвентаризация.")
+    Container(clinic_db,  "Clinic DB",           "PostgreSQL",           "Операционные данные клиники.\nБЕЗ медкарт и историй болезни.")
+    Container(clinic_dp,  "Clinic Data Product", "ClickHouse (Gold)",    "Аналитика: загрузка клиники,\nинвентаризация, персонал.\nПубликуется в Data Catalog.")
+}
+
+' ══════════════════════════════════════════════════════════════════════════
+' FINTECH DOMAIN
+' ══════════════════════════════════════════════════════════════════════════
+System_Boundary(fintech_domain, "Fintech Domain") {
+    Container(fintech_svc, "Fintech Services",     "Go / Java",         "Банковские операции, кредиты,\nсчета, финансовая история.")
+    Container(banking_core,"Banking Core",          "Acquired System",   "Ядро банка (приобретённого).\nАнтикоррупционный слой для интеграции.")
+    Container(fintech_db,  "Fintech DB",            "PostgreSQL",        "Операционные финансовые данные.")
+    Container(fintech_dp,  "Fintech Data Product",  "ClickHouse (Gold)", "Аналитика: транзакции, кредиты,\nфинансовая отчётность.")
+}
+
+' ══════════════════════════════════════════════════════════════════════════
+' AI/ML DOMAIN (изолирован — не публикует в витрину данных)
+' ══════════════════════════════════════════════════════════════════════════
+System_Boundary(ai_domain, "AI/ML Domain [ISOLATED]") {
+    Container(ai_svc,     "AI Services",      "Python / FastAPI",    "Диагностика, анализ снимков,\nML-инференс. Только внутренние вызовы.")
+    Container(med_storage,"Medical Storage",  "YOS (encrypted)",     "Медкарты, снимки, истории болезни.\nДОСТУП: только AI Services.\nНЕ попадает в витрину данных.")
+    Container(ml_platform,"ML Platform",      "MLflow / Jupyter",    "Обучение моделей,\nэксперименты, версионирование.")
+}
+
+' ══════════════════════════════════════════════════════════════════════════
+' CORPORATE / HQ DOMAIN
+' ══════════════════════════════════════════════════════════════════════════
+System_Boundary(corp_domain, "Corporate / HQ Domain") {
+    Container(corp_svc,   "Corporate Services", "Go / Java",          "HR, инвентаризация,\nфинансовая отчётность головного офиса.")
+    Container(corp_dp,    "Corporate Data Product", "ClickHouse (Gold)", "KPI по всем доменам,\nсводная отчётность, регуляторные данные.")
+}
+
+' ══════════════════════════════════════════════════════════════════════════
+' FUTURE DOMAINS (новые бизнес-направления)
+' ══════════════════════════════════════════════════════════════════════════
+System_Boundary(future_domains, "Future Domains (Год 2–3)") {
+    Container(pharma_svc, "Pharma Services",   "TBD",  "Фармацевтический партнёр.\nПодключается как Kafka producer\nбез изменений других доменов.")
+    Container(meddev_svc, "MedDevice Services","TBD",  "Производитель мед. оборудования.\nТелеметрия устройств через Kafka.")
+}
+
+' ══════════════════════════════════════════════════════════════════════════
+' LEGACY (на период миграции, этапы 1–2)
+' ══════════════════════════════════════════════════════════════════════════
+System_Boundary(legacy, "Legacy Systems [MIGRATION BRIDGE]") {
+    Container(dwh,     "DWH",          "SQL Server 2008",  "Выводится из эксплуатации к году 3.\nRead-only после этапа 2.")
+    Container(esb,     "ESB",          "Apache Camel",     "Антикоррупционные слои до отключения.\nЗаменяется Kafka.")
+    Container(pb_ui,   "PowerBuilder UI","PowerBuilder",   "Выводится после запуска Clinic Web App.")
+}
+
+' ══════════════════════════════════════════════════════════════════════════
+' ОТНОШЕНИЯ — пользователи
+' ══════════════════════════════════════════════════════════════════════════
+Rel(doctor,  clinic_ui,  "Работает с пациентами",       "HTTPS")
+Rel(patient, gateway,    "Использует сервисы",           "HTTPS")
+Rel(analyst, portal,     "Строит отчёты",                "HTTPS")
+
+' ══════════════════════════════════════════════════════════════════════════
+' ОТНОШЕНИЯ — домены → Kafka
+' ══════════════════════════════════════════════════════════════════════════
+Rel(clinic_api,  kafka, "Публикует события клиники",     "Kafka Producer")
+Rel(fintech_svc, kafka, "Публикует финансовые события",  "Kafka Producer")
+Rel(ai_svc,      kafka, "Публикует AI-события",          "Kafka Producer (isolated topic)")
+Rel(corp_svc,    kafka, "Публикует корп. события",       "Kafka Producer")
+Rel(pharma_svc,  kafka, "Публикует данные о препаратах", "Kafka Producer")
+Rel(meddev_svc,  kafka, "Публикует телеметрию",          "Kafka Producer")
+
+' ══════════════════════════════════════════════════════════════════════════
+' ОТНОШЕНИЯ — Kafka → Data Products
+' ══════════════════════════════════════════════════════════════════════════
+Rel(kafka, clinic_dp,  "Потоковая запись Bronze→Gold",  "Kafka Consumer / Flink")
+Rel(kafka, fintech_dp, "Потоковая запись Bronze→Gold",  "Kafka Consumer / Flink")
+Rel(kafka, corp_dp,    "Потоковая запись Bronze→Gold",  "Kafka Consumer / Flink")
+Rel(kafka, object_store,"Запись Bronze/Silver слоёв",   "S3 Sink Connector")
+
+' ══════════════════════════════════════════════════════════════════════════
+' ОТНОШЕНИЯ — Data Products → Portal
+' ══════════════════════════════════════════════════════════════════════════
+Rel(clinic_dp,  portal, "Данные клиники (Gold)",         "SQL / ClickHouse")
+Rel(fintech_dp, portal, "Финансовые данные (Gold)",      "SQL / ClickHouse")
+Rel(corp_dp,    portal, "КПЭ и сводная отчётность",      "SQL / ClickHouse")
+Rel(catalog,    portal, "Метаданные датасетов",           "REST API")
+
+' ══════════════════════════════════════════════════════════════════════════
+' ОТНОШЕНИЯ — API Gateway
+' ══════════════════════════════════════════════════════════════════════════
+Rel(gateway, clinic_api,  "Роутинг к Clinic API",    "REST / gRPC")
+Rel(gateway, fintech_svc, "Роутинг к Fintech",       "REST")
+Rel(clinic_ui, gateway,   "Все запросы через Gateway","HTTPS")
+
+' ══════════════════════════════════════════════════════════════════════════
+' ОТНОШЕНИЯ — Legacy bridge
+' ══════════════════════════════════════════════════════════════════════════
+Rel(dwh, esb,   "Источник данных (read-only)", "JDBC")
+Rel(esb, kafka, "ACL bridge → Kafka",          "Kafka Connect / Debezium")
+
+' AI домен изолирован — напрямую к med_storage
+Rel(ai_svc, med_storage, "Читает/пишет медданные", "S3 API (encrypted)")
+
+@enduml

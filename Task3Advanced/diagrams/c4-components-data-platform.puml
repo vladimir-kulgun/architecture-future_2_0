@@ -1,0 +1,95 @@
+@startuml C4_Components_DataPlatform
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+LAYOUT_TOP_DOWN()
+
+title C4 Level 3 — Components: Data Platform (per domain) + Self-Service Portal
+
+' ─── Внешние контейнеры ────────────────────────────────────────────────────
+Container_Ext(kafka,     "Event Streaming Platform", "Apache Kafka",  "Источник сырых событий")
+Container_Ext(analyst,   "Бизнес-аналитик",          "Person",        "Строит отчёты и дашборды")
+Container_Ext(data_catalog_ext, "Data Catalog",      "DataHub",       "Метаданные, lineage, классификация")
+
+' ═══════════════════════════════════════════════════════════════════════════
+' DATA PLATFORM (показана на примере одного домена; каждый домен — своя копия)
+' ═══════════════════════════════════════════════════════════════════════════
+System_Boundary(dp, "Data Platform — Clinic Domain (пример; аналогично для Fintech, Corporate)") {
+
+    Component(bronze, "Bronze Zone",
+              "Yandex Object Storage (S3), Parquet / Avro",
+              "Сырые события из Kafka — immutable, append-only.\nНе трансформируются, хранятся как есть.\nRetention: 1 год. Партиционировано по дате.")
+
+    Component(silver, "Silver Zone",
+              "Yandex Object Storage (S3), Parquet",
+              "Очищенные, дедуплицированные данные.\nПрименены схемы, типы, null-проверки.\nRetention: 3 года.")
+
+    Component(dbt_transform, "dbt Transformations",
+              "dbt Core (SQL-трансформации)",
+              "Silver → Gold: бизнес-агрегаты, метрики.\nТесты: not_null, unique, referential_integrity.\nCI-проверка при каждом PR.")
+
+    Component(gold, "Gold Zone — Data Product",
+              "ClickHouse (Managed YC), MergeTree / ReplacingMergeTree",
+              "Витрина аналитических данных домена.\nПример таблиц: clinic_visits_daily, inventory_summary.\nОбновляется потоково через Flink (near-real-time).\nПУБЛИЧНЫЙ data product домена.")
+
+    Component(flink_proc, "Stream Processor",
+              "Apache Flink Job (Bronze → Silver → Gold)",
+              "Stateful трансформации в реальном времени.\nBronze→Silver: парсинг, валидация, дедупликация.\nSilver→Gold: агрегаты, windowed metrics.")
+
+    Component(acl_layer, "Access Control Layer",
+              "OPA (Open Policy Agent) + ClickHouse Row Policies",
+              "RBAC: сотрудник видит только свой домен и уровень доступа.\nRow policies: фильтрация по department_id, role.\nАудит доступа к данным.\nКлассификационный тег MEDICAL_RESTRICTED блокирует доступ к AI-домену.")
+
+    Component(datahub_conn, "DataHub Connector",
+              "DataHub Ingestion (ClickHouse + dbt metadata)",
+              "Автоматически регистрирует data products в каталоге.\nПубликует lineage: Kafka → Bronze → Silver → Gold.\nТеги: domain, owner, sensitivity_level, update_frequency.")
+}
+
+' ═══════════════════════════════════════════════════════════════════════════
+' SELF-SERVICE PORTAL
+' ═══════════════════════════════════════════════════════════════════════════
+System_Boundary(portal, "Self-Service Portal") {
+
+    Component(superset, "Apache Superset",
+              "Apache Superset (Open Source BI)",
+              "Self-service: drag-and-drop конструктор отчётов.\nПодключён к Gold ClickHouse всех доменов.\nRBAC: пользователь видит только свои дашборды и данные.")
+
+    Component(powerbi, "Power BI",
+              "Power BI (Microsoft) — переходный период",
+              "Переключён с DWH на ClickHouse Gold.\nСохранён для существующих отчётов и экспертизы команды.\nПлан: постепенная миграция в Superset.")
+
+    Component(portal_auth, "Auth & RBAC",
+              "SSO (LDAP / Yandex ID) + OPA",
+              "Single Sign-On для всех инструментов портала.\nРоли: viewer, analyst, domain_admin.\nПоловые блоки: медданные недоступны через портал.")
+
+    Component(catalog_ui, "Data Catalog UI",
+              "DataHub Frontend",
+              "Поиск по доменным data products.\nПросмотр lineage и метаданных.\nЗапрос доступа к datasets через approval workflow.")
+}
+
+' ─── Kafka → Bronze ────────────────────────────────────────────────────────
+Rel(kafka, bronze,       "Поток сырых событий (S3 Sink Connector)", "Kafka → S3")
+Rel(kafka, flink_proc,   "Потоковые события для обработки",         "Kafka Consumer")
+
+' ─── Внутри Data Platform ──────────────────────────────────────────────────
+Rel(flink_proc, bronze,       "Читает Bronze-данные",                "S3 API (batch replay)")
+Rel(flink_proc, silver,       "Пишет Silver-данные",                 "S3 API")
+Rel(flink_proc, gold,         "Пишет агрегаты (near-real-time)",     "ClickHouse INSERT")
+Rel(silver,     dbt_transform,"SQL-трансформации Silver → Gold",     "dbt run")
+Rel(dbt_transform, gold,      "Обновляет Gold-таблицы",              "ClickHouse DDL/DML")
+Rel(gold,       datahub_conn, "Публикует метаданные в каталог",      "DataHub REST API")
+Rel(gold,       acl_layer,    "Все запросы через ACL",               "ClickHouse Row Policies")
+
+' ─── Data Platform → Portal ────────────────────────────────────────────────
+Rel(acl_layer,   superset,   "Данные Gold с применёнными ACL",  "SQL (ClickHouse HTTP)")
+Rel(acl_layer,   powerbi,    "Данные Gold с применёнными ACL",  "SQL (ClickHouse ODBC)")
+Rel(data_catalog_ext, catalog_ui, "Метаданные и lineage",       "REST API")
+
+' ─── Portal → Пользователь ─────────────────────────────────────────────────
+Rel(portal_auth, superset,   "Аутентификация / авторизация",    "SSO / JWT")
+Rel(portal_auth, powerbi,    "Аутентификация / авторизация",    "SSO / SAML")
+Rel(superset,    analyst,    "Дашборды и custom отчёты",         "HTTPS")
+Rel(powerbi,     analyst,    "Существующие отчёты",              "HTTPS")
+Rel(catalog_ui,  analyst,    "Поиск и запрос доступа к данным", "HTTPS")
+
+@enduml

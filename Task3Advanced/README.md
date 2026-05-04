@@ -9,8 +9,9 @@ Task3Advanced/
 ├── diagrams/
 │   ├── c4-context.puml                    # C4 L1: System Context
 │   ├── c4-containers.puml                 # C4 L2: Containers (TO-BE, год 3)
-│   ├── c4-components-event-platform.puml  # C4 L3: Event Streaming Platform
+│   ├── c4-components-event-platform.puml  # C4 L3: Event Streaming Platform + Processing Layer
 │   └── c4-components-data-platform.puml   # C4 L3: Data Platform + Self-Service Portal
+├── esb-decomposition.md                  # Декомпозиция функций ESB → целевая архитектура
 ├── risk-map.md                            # Карта рисков с тепловой картой (14 рисков)
 ├── risk-management-plan.md               # Технические и управленческие меры снижения
 └── README.md
@@ -42,15 +43,36 @@ Task3Advanced/
 
 ### Уровень 3 — Event Streaming Platform (`c4-components-event-platform.puml`)
 
-| Компонент | Технология | Назначение |
-|-----------|-----------|-----------|
-| Kafka Broker Cluster | Apache Kafka, RF=3 | Хранение событий, at-least-once delivery |
-| Cluster Coordinator | KRaft (Kafka 3.x) | Координация без Zookeeper |
-| Schema Registry | Apicurio (Avro + Protobuf) | Версионирование схем, BACKWARD_TRANSITIVE |
-| Kafka Connect | Debezium CDC | SQL Server → Kafka; Bronze → YOS |
-| DLQ Topics | `dlq.*` topics | Failed events; alert при lag > 100 |
-| Audit Log Topic | `audit.events`, retention 5 лет | Compliance (152-ФЗ, ЦБ РФ) |
-| Topic Routing & ACL | Kafka ACL | Конвенция `<domain>.<entity>.<event-type>` |
+Диаграмма показывает три слоя, которые вместе заменяют функции Apache Camel ESB:
+
+**Integration Adapter Layer** (заменяет Camel-компоненты для внешних протоколов):
+
+| Компонент | Технология | Функция ESB |
+|-----------|-----------|------------|
+| CDC Adapter | Kafka Connect + Debezium | JDBC Source Connector → SQL Server |
+| HL7 / FHIR Adapter | Go микросервис (ACL) | Camel HL7 Component → ЕГИСЗ |
+| Banking Adapter | Go микросервис (ACL) | Camel SWIFT / HTTP → ЦБ РФ |
+| IoT / MQTT Adapter | Kafka Connect MQTT | Camel MQTT Component → MedDevice |
+
+**Event Streaming Platform** (только транспорт, Kafka ≠ ESB):
+
+| Компонент | Технология | Функция ESB |
+|-----------|-----------|------------|
+| Kafka Broker | Apache Kafka, RF=3 | Message Channel (только доставка) |
+| Schema Registry | Apicurio (Avro) | ФЛК уровень 2: структурная валидация |
+| Kafka Connect + SMT | Single Message Transforms | Простой field mapping без кода |
+| Topic ACL | Kafka ACL + naming convention | Content-Based Router → топология топиков |
+| DLQ Topics | `dlq.<domain>.*` | Dead Letter Channel |
+| Audit Log Topic | `audit.events`, retention 5 лет | Audit interceptor (compliance) |
+
+**Stream Processing Layer** (заменяет Camel EIP-трансформации):
+
+| Компонент | Технология | Функция ESB |
+|-----------|-----------|------------|
+| Stream Validator | Apache Flink | ФЛК уровень 3: бизнес-правила на потоке |
+| Stream Transformer | Apache Flink | Stateful enrichment, дедупликация, windows |
+| Stream Router/Splitter | Apache Flink Side Outputs | Splitter + Recipient List EIP |
+| Batch Transformer | dbt Core | Batch aggregation → Gold витрины |
 
 ### Уровень 3 — Data Platform (`c4-components-data-platform.puml`)
 

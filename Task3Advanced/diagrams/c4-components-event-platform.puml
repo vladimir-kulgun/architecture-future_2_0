@@ -4,70 +4,155 @@
 LAYOUT_WITH_LEGEND()
 LAYOUT_TOP_DOWN()
 
-title C4 Level 3 — Components: Event Streaming Platform
+title C4 Level 3 — Components: Event Streaming Platform + Processing Layer\n(Декомпозиция функций Apache Camel ESB)
 
-' ─── Внешние контейнеры (источники / потребители) ─────────────────────────
-Container_Ext(clinic_api,   "Clinic API",          "Go",           "Продюсер событий клиники")
-Container_Ext(fintech_svc,  "Fintech Services",    "Go / Java",    "Продюсер финансовых событий")
-Container_Ext(ai_svc,       "AI Services",         "Python",       "Продюсер AI-событий")
-Container_Ext(legacy_esb,   "ESB (Apache Camel)",  "Legacy",       "Антикоррупционный мост из DWH")
-Container_Ext(flink_jobs,   "Stream Processors",   "Apache Flink", "Трансформации Bronze→Silver")
+' ─── Внешние источники ─────────────────────────────────────────────────────
+Container_Ext(clinic_api,   "Clinic API",          "Go",            "Продюсер: публикует events после domain validation (ФЛК уровень 1)")
+Container_Ext(fintech_svc,  "Fintech Services",    "Go / Java",     "Продюсер: публикует events после domain validation (ФЛК уровень 1)")
+Container_Ext(ai_svc,       "AI Services",         "Python",        "Продюсер med.ai.* событий (изолированный ACL)")
+Container_Ext(legacy_dwh,   "DWH (SQL Server 2008)","Legacy",       "Источник исторических данных. Read-only с этапа 2")
+
+' ─── Внешние системы, требующие адаптации ─────────────────────────────────
+Container_Ext(egisz,        "ЕГИСЗ",               "HL7 FHIR",     "Федеральный реестр медданных. Нестандартный протокол")
+Container_Ext(cbrf_api,     "ЦБ РФ / НСПК",        "SWIFT / REST", "Банковский клиринг. Проприетарный протокол")
+Container_Ext(meddev_mqtt,  "MedDevice (IoT)",     "MQTT",          "Телеметрия устройств. MQTT / CoAP")
+
+' ─── Потребители событий ───────────────────────────────────────────────────
 Container_Ext(s3_sink,      "Object Storage",      "YOS / S3",     "Bronze / Silver хранилище")
-Container_Ext(clinic_dp,    "Clinic Data Product", "ClickHouse",   "Gold слой — потребитель событий")
-Container_Ext(fintech_dp,   "Fintech Data Product","ClickHouse",   "Gold слой — потребитель событий")
+Container_Ext(clinic_dp,    "Clinic Data Product", "ClickHouse",   "Gold слой Clinic домена")
+Container_Ext(fintech_dp,   "Fintech Data Product","ClickHouse",   "Gold слой Fintech домена")
+Container_Ext(notification, "Notification Service","Go",           "SMS / Email уведомления")
+Container_Ext(temporal,     "Workflow Engine",     "Temporal",     "Оркестрация долгосрочных бизнес-процессов (кредитные заявки, онбординг)")
 
 ' ═══════════════════════════════════════════════════════════════════════════
-' EVENT STREAMING PLATFORM — компоненты
+' ADAPTER LAYER — заменяет Camel-компоненты для внешних протоколов
+' (функция ESB: интеграция с внешними системами)
 ' ═══════════════════════════════════════════════════════════════════════════
-System_Boundary(esp, "Event Streaming Platform (Apache Kafka, Managed Yandex Cloud)") {
+System_Boundary(adapters, "Integration Adapter Layer  [ACL — заменяет Camel-компоненты ESB]") {
+
+    Component(debezium, "CDC Adapter",
+              "Kafka Connect + Debezium (SQL Server CDC)",
+              "Читает transaction log DWH без изменения источника.\nТранслирует строки таблиц в доменные события Kafka.\nФункция ESB: JDBC Source Connector.")
+
+    Component(hl7_adapter, "HL7 / FHIR Adapter",
+              "Go микросервис — Anti-Corruption Layer",
+              "Парсит HL7 FHIR ↔ доменные Avro-события.\nВызывает ЕГИСЗ API; публикует результат в med.egisz.*\nФункция ESB: Camel HL7 Component.")
+
+    Component(cbrf_adapter, "Banking Adapter",
+              "Go микросервис — Anti-Corruption Layer",
+              "Интеграция с ЦБ РФ / НСПК (SWIFT, ФинТех API).\nТранслирует ответ клиринга в fintech.payment.cleared.\nФункция ESB: Camel SWIFT / HTTP Component.")
+
+    Component(iot_adapter, "IoT / MQTT Adapter",
+              "Kafka Connect MQTT Connector",
+              "Подписывается на MQTT-брокер устройств.\nТранслирует телеметрию в meddev.device.telemetry (Avro).\nФункция ESB: Camel MQTT Component.")
+}
+
+' ═══════════════════════════════════════════════════════════════════════════
+' EVENT STREAMING PLATFORM — транспортный слой (Kafka = только доставка)
+' ═══════════════════════════════════════════════════════════════════════════
+System_Boundary(esp, "Event Streaming Platform  [Transport — Apache Kafka, Managed Yandex Cloud]") {
 
     Component(broker_cluster, "Kafka Broker Cluster",
               "Apache Kafka, 3+ brokers, replication factor 3",
-              "Хранение и доставка событий.\nГарантия at-least-once delivery.\nRetention: 7 дней (бизнес-события), 90 дней (аудит).")
+              "Хранение и доставка событий. Только транспорт — никакой логики.\nat-least-once delivery. Retention: 7 дней (бизнес), 90 дней (аудит).\nПартиционирование по entity_id для упорядоченности.")
 
     Component(kraft, "Cluster Coordinator",
               "KRaft (встроенный в Kafka 3.x)",
-              "Координация кластера без Zookeeper.\nОтвечает за выборы лидера и метаданные партиций.")
+              "Координация кластера без Zookeeper.\nВыборы лидера, метаданные партиций.")
 
     Component(schema_registry, "Schema Registry",
-              "Apicurio Registry (OpenAPI + Avro + Protobuf)",
-              "Версионирование схем событий.\nПравила: BACKWARD_TRANSITIVE compatibility.\nЗапрет деплоя при нарушении совместимости схемы.")
+              "Apicurio Registry (Avro + Protobuf + OpenAPI)",
+              "ФЛК уровень 2: структурная валидация схемы при публикации.\nBACKWARD_TRANSITIVE: breaking change блокируется в CI.\nЗапрет деплоя продюсера при нарушении совместимости.")
 
-    Component(kafka_connect, "Kafka Connect",
-              "Kafka Connect + Debezium CDC",
-              "Source connectors:\n  • Debezium: SQL Server → Kafka (CDC, reads transaction log)\n  • MedDevice IoT connector\nSink connectors:\n  • S3 Sink → Object Storage (Bronze)")
+    Component(kafka_connect_platform, "Kafka Connect + SMT",
+              "Kafka Connect с Single Message Transforms",
+              "Простые трансформации без кода (функция ESB: field mapping):\n  • ReplaceField, MaskField, TimestampConverter\n  • ExtractTopic (routing по полю сообщения)\nSink: S3 Sink → Object Storage (Bronze).\nSource: CDC Adapter, IoT Adapter.")
 
-    Component(dlq, "Dead Letter Queue Topics",
-              "Kafka Topics (dlq.*)",
-              "Хранит failed/unprocessable события.\nМониторинг: alert при DLQ lag > 100.\nRe-processing через отдельный consumer.")
+    Component(topic_acl, "Topic Routing & ACL",
+              "Kafka ACL + Topic Naming Convention",
+              "Маршрутизация через naming: <domain>.<entity>.<event-type>\nФункция ESB: Content-Based Router → заменён топологией топиков.\nACL: med.* — только AI Services; fintech.* закрыт для Clinic.")
 
     Component(audit_topic, "Audit Log Topic",
-              "Kafka Topic (audit.events, immutable, retention: 5 лет)",
-              "Все события записываются в audit topic.\nИспользуется для compliance (152-ФЗ, ЦБ РФ).\nACL: write-only для продюсеров, read-only для аудиторов.")
+              "Kafka Topic (audit.events, immutable, retention 5 лет)",
+              "Все события зеркалируются в audit (compliance 152-ФЗ, ЦБ РФ).\nACL: write-only для продюсеров, read-only для аудиторов.")
 
-    Component(topic_routing, "Topic Routing & ACL",
-              "Kafka ACL + Topic Naming Convention",
-              "Конвенция: <domain>.<entity>.<event-type>\nПример: clinic.visit.created, fintech.payment.processed\nACL: AI-домен не имеет доступа к fintech.* топикам.\nМедицинские топики: med.* — доступ только AI Services.")
+    Component(dlq, "Dead Letter Queue Topics",
+              "Kafka Topics (dlq.<domain>.*)",
+              "Failed / unprocessable события после ФЛК уровня 3 (Flink).\nAlert при DLQ lag > 100. Re-processing через отдельный consumer.\nФункция ESB: error channel / dead letter channel.")
 }
 
-' ─── Отношения: Продюсеры → Broker ────────────────────────────────────────
-Rel(clinic_api,  broker_cluster, "Публикует clinic.* события",      "Kafka Producer API (Avro)")
-Rel(fintech_svc, broker_cluster, "Публикует fintech.* события",     "Kafka Producer API (Avro)")
-Rel(ai_svc,      broker_cluster, "Публикует med.ai.* события",      "Kafka Producer API (isolated ACL)")
-Rel(legacy_esb,  kafka_connect,  "Поток из DWH через CDC",          "Debezium JDBC / SQL Server CDC")
-Rel(kafka_connect, broker_cluster,"Записывает CDC-события в топики","Kafka Connect API")
+' ═══════════════════════════════════════════════════════════════════════════
+' STREAM PROCESSING LAYER — заменяет Camel-трансформации и часть бизнес-логики
+' (функции ESB: сложные трансформации, ФЛК уровень 3, обогащение)
+' ═══════════════════════════════════════════════════════════════════════════
+System_Boundary(processing, "Stream Processing Layer  [заменяет Camel EIP-трансформации и ФЛК уровень 3]") {
 
-' ─── Внутренние отношения ─────────────────────────────────────────────────
-Rel(broker_cluster, schema_registry, "Валидирует схему события",    "Schema Registry API")
-Rel(broker_cluster, dlq,             "Failed events → DLQ",         "Kafka internal routing")
-Rel(broker_cluster, audit_topic,     "Все события → Audit",         "Mirror / interceptor")
-Rel(topic_routing,  broker_cluster,  "Применяет ACL-правила",       "Kafka ACL API")
+    Component(flink_validation, "Stream Validator",
+              "Apache Flink Job — Bronze validation",
+              "ФЛК уровень 3: бизнес-правила на потоке.\nПроверки: cross-field constraints, referential integrity.\nПример: doctor_id существует, visited_at ≤ now().\nНевалидные → DLQ. Валидные → Silver zone.")
 
-' ─── Отношения: Broker → Потребители ─────────────────────────────────────
-Rel(broker_cluster, kafka_connect, "S3 Sink: Bronze в Object Storage", "Kafka Consumer")
-Rel(kafka_connect,  s3_sink,       "Записывает Bronze-данные",         "S3 API")
-Rel(broker_cluster, flink_jobs,    "Потоковые трансформации",          "Kafka Consumer (Flink source)")
-Rel(flink_jobs,     clinic_dp,     "Silver → Gold (Clinic)",           "ClickHouse INSERT")
-Rel(flink_jobs,     fintech_dp,    "Silver → Gold (Fintech)",          "ClickHouse INSERT")
+    Component(flink_transform, "Stream Transformer",
+              "Apache Flink Job — Bronze → Silver",
+              "Функция ESB: сложные stateful трансформации.\nДедупликация по event_id (exactly-once семантика).\nStateful enrichment: Flink AsyncIO → lookup в ClickHouse.\nОконные агрегаты (tumbling / sliding windows).\nПример: clinic.visit.completed → visit_duration_minutes.")
+
+    Component(flink_router, "Stream Router / Splitter",
+              "Apache Flink Job — топик → несколько потоков",
+              "Функция ESB: Splitter + Recipient List EIP.\nОдно событие → несколько downstream событий.\nПример: VisitCompleted → ItemConsumed + BillingInitiated + AITrigger.\nVirtualization: Side outputs для ветвления.")
+
+    Component(dbt_layer, "Batch Transformer",
+              "dbt Core (SQL-трансформации Silver → Gold)",
+              "Функция ESB: batch aggregation / reporting transforms.\nSilver → Gold: бизнес-метрики, витрины, KPI.\ndbt-тесты: not_null, unique, referential_integrity.\nCI-проверка качества при каждом PR.")
+}
+
+' ═══════════════════════════════════════════════════════════════════════════
+' ОТНОШЕНИЯ
+' ═══════════════════════════════════════════════════════════════════════════
+
+' --- Domain Services → Kafka (после domain-level ФЛК) ---
+Rel(clinic_api,  broker_cluster, "Публикует clinic.* (после ФЛК уровень 1)",  "Kafka Producer (Avro)")
+Rel(fintech_svc, broker_cluster, "Публикует fintech.* (после ФЛК уровень 1)", "Kafka Producer (Avro)")
+Rel(ai_svc,      broker_cluster, "Публикует med.ai.* (isolated ACL)",          "Kafka Producer (Avro)")
+
+' --- Adapter Layer → Kafka ---
+Rel(legacy_dwh,   debezium,            "Transaction log CDC",                 "Debezium SQL Server CDC")
+Rel(debezium,     broker_cluster,      "legacy.dwh.* события",                "Kafka Connect Source")
+Rel(egisz,        hl7_adapter,         "HL7 FHIR messages",                   "HL7 / HTTPS")
+Rel(hl7_adapter,  broker_cluster,      "med.egisz.* события",                 "Kafka Producer (Avro)")
+Rel(cbrf_api,     cbrf_adapter,        "Клиринговые ответы",                  "SWIFT / REST")
+Rel(cbrf_adapter, broker_cluster,      "fintech.payment.cleared события",      "Kafka Producer (Avro)")
+Rel(meddev_mqtt,  iot_adapter,         "MQTT телеметрия",                     "MQTT / Kafka Connect")
+Rel(iot_adapter,  broker_cluster,      "meddev.device.telemetry события",      "Kafka Connect Source")
+
+' --- Schema Registry (ФЛК уровень 2) ---
+Rel(broker_cluster, schema_registry, "Валидация схемы при публикации",        "Schema Registry API")
+
+' --- Routing & ACL ---
+Rel(topic_acl,  broker_cluster, "Применяет ACL-правила на топики",           "Kafka ACL API")
+
+' --- Kafka → Stream Processing (ФЛК уровень 3 + трансформации) ---
+Rel(broker_cluster, flink_validation, "Bronze события на валидацию",          "Kafka Consumer")
+Rel(flink_validation, dlq,            "Невалидные → DLQ",                    "Kafka Producer (dlq.*)")
+Rel(flink_validation, flink_transform,"Валидные Bronze → трансформация",      "In-process")
+Rel(flink_transform,  flink_router,   "Обогащённые события → роутинг",        "In-process / Kafka")
+Rel(flink_router, broker_cluster,     "Дочерние события (Splitter output)",    "Kafka Producer")
+
+' --- Kafka → Audit ---
+Rel(broker_cluster, audit_topic,      "Все события → Audit (mirror)",         "Kafka Mirror / Interceptor")
+
+' --- Kafka Connect Sink → Storage ---
+Rel(kafka_connect_platform, broker_cluster, "Читает Bronze топики",           "Kafka Consumer (S3 Sink)")
+Rel(kafka_connect_platform, s3_sink,        "Пишет Bronze Parquet/Avro",      "S3 API")
+
+' --- Silver → Gold ---
+Rel(flink_transform, s3_sink,        "Пишет Silver (cleaned, deduped)",      "S3 API (Parquet)")
+Rel(s3_sink, dbt_layer,              "Silver → Gold трансформации (batch)",   "dbt run (SQL)")
+Rel(dbt_layer, clinic_dp,            "Обновляет Clinic Gold таблицы",        "ClickHouse DDL/DML")
+Rel(dbt_layer, fintech_dp,           "Обновляет Fintech Gold таблицы",       "ClickHouse DDL/DML")
+Rel(flink_transform, clinic_dp,      "Near-real-time агрегаты (stream path)", "ClickHouse INSERT")
+Rel(flink_transform, fintech_dp,     "Near-real-time агрегаты (stream path)", "ClickHouse INSERT")
+
+' --- Notification & Orchestration ---
+Rel(broker_cluster, notification, "События-триггеры (AnomalyDetected, etc.)", "Kafka Consumer")
+Rel(broker_cluster, temporal,     "Запуск долгосрочных workflow",             "Temporal Kafka Interceptor")
 
 @enduml
